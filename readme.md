@@ -1,4 +1,4 @@
-# PROTOCOLO (versão direta)
+# PROTOCOLO
 
 Tudo big-endian. O código está em `protocol.py` e não deve ser alterado sem avisar o outro.
 
@@ -51,7 +51,7 @@ ERROR:        [06][código 1][seq 8][len][assinatura]
 DATA:         [03][nonce 12][sender 16][recipient 16][seq 8][ciphertext+tag 16]
 ```
 
-`pk_S` é DER SubjectPublicKeyInfo e `server.crt` é DER. `DATA` tem de 70 a 4165 bytes (plaintext de 1 a 4096).
+`pk_S` é DER SubjectPublicKeyInfo e `server.crt` é DER. `DATA` tem de 70 a 4165 bytes .
 
 ## HANDSHAKE
 
@@ -108,6 +108,6 @@ Sempre handshake completo, X25519 novo e contadores zerados. O cliente aceita `-
 - **Pode**: conexão e desconexão, `client_id`, tamanhos, motivo de rejeição, `fingerprint(pk)`.
 - **Não pode**: chaves privadas, `Z`, `salt`, `nonce`, conteúdo.
 
-## FORA DO ENUNCIADO (explicar na apresentação)
+## FORA DO ENUNCIADO
 
 `IV_base_recv` é aprendido, não sorteado. Mensagens administrativas são assinadas com RSA porque não há chave simétrica entre cliente e servidor. Clientes não são autenticados, e o E2E confia no servidor para entregar as chaves (mitigação: comparar fingerprints).
