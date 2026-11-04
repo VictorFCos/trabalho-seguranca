@@ -54,7 +54,46 @@ DATA_MIN_LEN = DATA_HEADER_LEN + 1 + TAG_LEN
 DATA_MAX_LEN = DATA_HEADER_LEN + MAX_PLAINTEXT + TAG_LEN
 
 
+# ==========================================
+# EXCEÇÕES DO PROTOCOLO
+# ==========================================
+class ConnectionClosed(Exception):
+    """Disparada quando o socket fecha ou atinge EOF durante uma leitura."""
+    pass
+
+
+class ProtocolError(Exception):
+    """
+    Disparada em caso de violação das regras do protocolo.
+    Carrega uma mensagem e um código numérico de erro (ErrorCode).
+    
+    ATENÇÃO: De acordo com a política de segurança, a mensagem NUNCA deve 
+    conter chaves privadas, segredos (Z), salt, nonce ou conteúdo de mensagens.
+    """
+    def __init__(self, message: str, code: ErrorCode | int | None = None):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+    def __str__(self) -> str:
+        if self.code is not None:
+            code_repr = self.code.name if hasattr(self.code, "name") else f"0x{self.code:02x}"
+            return f"[{code_repr}] {self.message}"
+        return self.message
+
+
 if __name__ == "__main__":
     print(f"DATA_HEADER_LEN: {DATA_HEADER_LEN}")
     print(f"DATA_MIN_LEN:    {DATA_MIN_LEN}")
     print(f"DATA_MAX_LEN:    {DATA_MAX_LEN}")
+
+    # Teste das exceções
+    err = ProtocolError("Framing inválido recebido", ErrorCode.FRAMING_INVALID)
+    assert isinstance(err, Exception)
+    assert err.code == ErrorCode.FRAMING_INVALID
+    assert str(err) == "[FRAMING_INVALID] Framing inválido recebido"
+
+    closed = ConnectionClosed("Conexão fechada pelo peer")
+    assert isinstance(closed, Exception)
+    print("Testes de exceções: OK")
+
