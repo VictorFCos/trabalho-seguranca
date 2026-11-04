@@ -113,6 +113,55 @@ def unpack_field(buffer: bytes, offset: int = 0) -> tuple[bytes, int]:
     return field_data, new_offset
 
 
+# ==========================================
+# CLIENT_HELLO (Tipo 0x01)
+# Formato: [01][client_id 16][pk_C 32] -> Total 49 bytes
+# ==========================================
+CLIENT_HELLO_LEN = 1 + ID_LEN + PK_LEN  # 49 bytes
+
+
+class ClientHello(NamedTuple):
+    client_id: bytes
+    pk_client: bytes
+
+
+def pack_client_hello(client_id: bytes, pk_client: bytes) -> bytes:
+    """
+    Empacota o corpo do CLIENT_HELLO: [01][client_id 16][pk_C 32].
+    Retorna exatamente 49 bytes.
+    """
+    if len(client_id) != ID_LEN:
+        raise ProtocolError(f"client_id deve ter {ID_LEN} bytes (recebido: {len(client_id)})", ErrorCode.FRAMING_INVALID)
+    if len(pk_client) != PK_LEN:
+        raise ProtocolError(f"pk_client deve ter {PK_LEN} bytes (recebido: {len(pk_client)})", ErrorCode.FRAMING_INVALID)
+
+    return bytes([FrameType.CLIENT_HELLO]) + client_id + pk_client
+
+
+def parse_client_hello(data: bytes) -> ClientHello:
+    """
+    Desempacota o corpo do CLIENT_HELLO.
+    Exige exatamente 49 bytes e tipo 0x01.
+    """
+    if len(data) != CLIENT_HELLO_LEN:
+        raise ProtocolError(
+            f"CLIENT_HELLO deve ter exatamente {CLIENT_HELLO_LEN} bytes (recebido: {len(data)})",
+            ErrorCode.FRAMING_INVALID,
+        )
+
+    if data[0] != FrameType.CLIENT_HELLO:
+        raise ProtocolError(
+            f"Tipo inválido para CLIENT_HELLO: esperado 0x{FrameType.CLIENT_HELLO:02x}, recebido 0x{data[0]:02x}",
+            ErrorCode.UNKNOWN_TYPE,
+        )
+
+    client_id = data[1 : 1 + ID_LEN]
+    pk_client = data[1 + ID_LEN : 1 + ID_LEN + PK_LEN]
+
+    return ClientHello(client_id=client_id, pk_client=pk_client)
+
+
+
 #funções encode_frame: valida se o tamanho esta dentro dos limites; send_frame: escreve o frame do socket e aguarda o envio; 
 #frame e recv_frame: 
 class Frame(NamedTuple):
