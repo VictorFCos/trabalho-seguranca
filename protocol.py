@@ -353,6 +353,128 @@ def verify_digest(
         return False
 
 
+# ==========================================
+# MENSAGENS ADMINISTRATIVAS (PEER_JOINED, PEER_LEFT, ERROR)
+# ==========================================
+PEER_JOINED_PAYLOAD_LEN = ID_LEN + PK_LEN + SALT_LEN  # 16 + 32 + 16 = 64 bytes
+PEER_LEFT_PAYLOAD_LEN = ID_LEN                        # 16 bytes
+ERROR_PAYLOAD_LEN = 1                                 # 1 byte
+
+ADMIN_PAYLOAD_SIZES = {
+    FrameType.PEER_JOINED: PEER_JOINED_PAYLOAD_LEN,
+    FrameType.PEER_LEFT: PEER_LEFT_PAYLOAD_LEN,
+    FrameType.ERROR: ERROR_PAYLOAD_LEN,
+}
+
+
+class AdminMessage(NamedTuple):
+    type: int
+    payload: bytes
+    seq: int
+    signature: bytes
+
+
+def build_peer_joined_payload(client_id: bytes, pk_client: bytes, peer_salt: bytes) -> bytes:
+    """Constrói payload de PEER_JOINED: [client_id 16][pk_C 32][salt_do_peer 16] (64 bytes)."""
+    if len(client_id) != ID_LEN:
+        raise ProtocolError(f"client_id deve ter {ID_LEN} bytes (recebido: {len(client_id)})", ErrorCode.FRAMING_INVALID)
+    if len(pk_client) != PK_LEN:
+        raise ProtocolError(f"pk_client deve ter {PK_LEN} bytes (recebido: {len(pk_client)})", ErrorCode.FRAMING_INVALID)
+    if len(peer_salt) != SALT_LEN:
+        raise ProtocolError(f"peer_salt deve ter {SALT_LEN} bytes (recebido: {len(peer_salt)})", ErrorCode.FRAMING_INVALID)
+
+    return client_id + pk_client + peer_salt
+
+
+def build_peer_left_payload(client_id: bytes) -> bytes:
+    """Constrói payload de PEER_LEFT: [client_id 16] (16 bytes)."""
+    if len(client_id) != ID_LEN:
+        raise ProtocolError(f"client_id deve ter {ID_LEN} bytes (recebido: {len(client_id)})", ErrorCode.FRAMING_INVALID)
+    return client_id
+
+
+def build_error_payload(error_code: int | ErrorCode) -> bytes:
+    """Constrói payload de ERROR: [código 1] (1 byte)."""
+    code_val = int(error_code)
+    if not (0 <= code_val <= 255):
+        raise ProtocolError(f"Código de erro inválido para 1 byte: {code_val}", ErrorCode.FRAMING_INVALID)
+    return bytes([code_val])
+
+
+def pack_admin(
+    frame_type: int | FrameType,
+    payload: bytes,
+    seq: int,
+    signature: bytes,
+) -> bytes:
+    """
+    Empacota o corpo de uma mensagem administrativa:
+    [1B tipo][payload][seq 8B (>Q)][len 2B][assinatura]
+    """
+    tipo_int = int(frame_type)
+    expected_len = ADMIN_PAYLOAD_SIZES.get(tipo_int)
+    if expected_len is None:
+        raise ProtocolError(f"Tipo desconhecido para mensagem administrativa: {tipo_int}", ErrorCode.UNKNOWN_TYPE)
+
+    if len(payload) != expected_len:
+        raise ProtocolError(
+            f"Payload de tipo 0x{tipo_int:02x} deve ter {expected_len} bytes (recebido: {len(payload)})",
+            ErrorCode.FRAMING_INVALID,
+        )
+
+    if not (0 <= seq <= 0xFFFFFFFFFFFFFFFF):
+        raise ProtocolError(f"Contador seq inválido para 64 bits: {seq}", ErrorCode.FRAMING_INVALID)
+
+    return (
+        bytes([tipo_int])
+        + payload
+        + struct.pack(">Q", seq)
+        + pack_field(signature)
+    )
+
+
+def parse_admin(data: bytes) -> AdminMessage:
+    """
+    Desempacota o corpo de uma mensagem administrativa.
+    Identifica tamanho pelo tipo, lê seq e assinatura, e exige consumo exato do buffer.
+    Não verifica a assinatura.
+    """
+    if len(data) < 1:
+        raise ProtocolError("Buffer vazio para mensagem administrativa", ErrorCode.FRAMING_INVALID)
+
+    frame_type = data[0]
+    expected_len = ADMIN_PAYLOAD_SIZES.get(frame_type)
+    if expected_len is None:
+        raise ProtocolError(f"Tipo não administrativo ou desconhecido: 0x{frame_type:02x}", ErrorCode.UNKNOWN_TYPE)
+
+    # Mínimo: 1 (tipo) + expected_len + 8 (seq) + 2 (tamanho do campo de assinatura)
+    min_len = 1 + expected_len + SEQ_LEN + 2
+    if len(data) < min_len:
+        raise ProtocolError(
+            f"Tamanho insuficiente para frame administrativo (esperado no mínimo {min_len}, recebido {len(data)})",
+            ErrorCode.FRAMING_INVALID,
+        )
+
+    payload_start = 1
+    payload_end = payload_start + expected_len
+    payload = data[payload_start:payload_end]
+
+    seq_start = payload_end
+    seq_end = seq_start + SEQ_LEN
+    (seq,) = struct.unpack(">Q", data[seq_start:seq_end])
+
+    signature, final_offset = unpack_field(data, seq_end)
+
+    if final_offset != len(data):
+        raise ProtocolError(
+            f"Frame administrativo contém {len(data) - final_offset} bytes extras no final",
+            ErrorCode.FRAMING_INVALID,
+        )
+
+    return AdminMessage(type=frame_type, payload=payload, seq=seq, signature=signature)
+
+
+
 
 
 
