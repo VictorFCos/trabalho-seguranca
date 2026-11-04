@@ -84,9 +84,37 @@ class ProtocolError(Exception):
 
 
 # ==========================================
-# ESTRUTURA E FUNÇÕES DE FRAMING
-# Prefixo de 4 bytes big-endian: [4B tamanho][1B tipo][campos]
+# CAMPOS VARIÁVEIS
+# Formato: [2B tamanho big-endian (>H)][bytes]
 # ==========================================
+def pack_field(data: bytes) -> bytes:
+    """Serializa um campo variável adicionando prefixo de 2 bytes big-endian (>H)."""
+    if len(data) > 0xFFFF:
+        raise ProtocolError("Campo excede o tamanho máximo de 65535 bytes", ErrorCode.FRAMING_INVALID)
+    return struct.pack(">H", len(data)) + data
+
+
+def unpack_field(buffer: bytes, offset: int = 0) -> tuple[bytes, int]:
+    """
+    Lê um campo variável a partir de offset em buffer.
+    Retorna (dados_do_campo, novo_offset).
+    Rejeita buffers truncados com ProtocolError(FRAMING_INVALID).
+    """
+    if offset + 2 > len(buffer):
+        raise ProtocolError("Buffer insuficiente para ler tamanho do campo variável", ErrorCode.FRAMING_INVALID)
+
+    (field_len,) = struct.unpack_from(">H", buffer, offset)
+    new_offset = offset + 2 + field_len
+
+    if new_offset > len(buffer):
+        raise ProtocolError("Buffer truncado: tamanho do campo excede bytes restantes", ErrorCode.FRAMING_INVALID)
+
+    field_data = buffer[offset + 2 : new_offset]
+    return field_data, new_offset
+
+
+#funções encode_frame: valida se o tamanho esta dentro dos limites; send_frame: escreve o frame do socket e aguarda o envio; 
+#frame e recv_frame: 
 class Frame(NamedTuple):
     type: int
     payload: bytes
