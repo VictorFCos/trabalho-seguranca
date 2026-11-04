@@ -653,6 +653,29 @@ def pair_salt(
     return my_salt if i_am_a(my_id, peer_id) else peer_salt
 
 
+# ==========================================
+# FINGERPRINT (LOGS E IDENTIFICAÇÃO)
+# Primeiros 16 caracteres hexadecimais do SHA-256 da chave pública
+# ==========================================
+def fingerprint(pk: bytes) -> str:
+    """
+    Calcula o fingerprint da chave pública: primeiros 16 caracteres hexadecimais do SHA-256.
+    Seguro para uso em logs e verificação visual entre clientes.
+    """
+    if hasattr(pk, "public_bytes_raw"):
+        # Objeto X25519PublicKey
+        pk_bytes = pk.public_bytes_raw()
+    elif hasattr(pk, "public_bytes"):
+        # Objeto RSAPublicKey (DER SubjectPublicKeyInfo)
+        pk_bytes = public_key_der(pk)
+    else:
+        pk_bytes = bytes(pk)
+
+    digest = hashlib.sha256(pk_bytes).hexdigest()
+    return digest[:16]
+
+
+
 
 
 
