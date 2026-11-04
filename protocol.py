@@ -9,6 +9,10 @@ import hashlib
 import struct
 from typing import NamedTuple
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
 # ==========================================
 # CONSTANTES DE TAMANHO (em bytes)
 # ==========================================
@@ -283,6 +287,71 @@ def admin_hash(
 
     material = b"ADMIN" + tipo_byte + salt_destino + seq_bytes + payload
     return hashlib.sha256(material).digest()
+
+
+# ==========================================
+# ASSINATURAS RSA-PSS
+# PSS com MGF1(SHA256), salt_length=32 e hash SHA256.
+# H é passado como mensagem direta (sem Prehashed).
+# ==========================================
+def public_key_der(public_key: rsa.RSAPublicKey) -> bytes:
+    """Exporta chave pública RSA no formato binário DER (SubjectPublicKeyInfo)."""
+    if hasattr(public_key, "public_key"):
+        public_key = public_key.public_key()
+    return public_key.public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+
+
+def sign_digest(private_key: rsa.RSAPrivateKey, digest_h: bytes) -> bytes:
+    """
+    Assina o digest H com RSA-PSS sobre SHA256 (MGF1-SHA256, salt_length=32).
+    H é tratado diretamente como a mensagem (o PSS aplica SHA-256 por dentro).
+    """
+    pss_padding = padding.PSS(
+        mgf=padding.MGF1(hashes.SHA256()),
+        salt_length=PSS_SALT_LEN,
+    )
+    return private_key.sign(
+        digest_h,
+        pss_padding,
+        hashes.SHA256(),
+    )
+
+
+def verify_digest(
+    public_key: rsa.RSAPublicKey | bytes,
+    signature: bytes,
+    digest_h: bytes,
+) -> bool:
+    """
+    Verifica a assinatura RSA-PSS de digest_h.
+    Aceita o objeto RSAPublicKey ou bytes DER.
+    Retorna True se válida, False se inválida (sem propagar InvalidSignature).
+    """
+    try:
+        if isinstance(public_key, (bytes, bytearray)):
+            pub_obj = serialization.load_der_public_key(public_key)
+        else:
+            pub_obj = public_key
+
+        pss_padding = padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=PSS_SALT_LEN,
+        )
+        pub_obj.verify(
+            signature,
+            digest_h,
+            pss_padding,
+            hashes.SHA256(),
+        )
+        return True
+    except (InvalidSignature, ValueError, TypeError):
+        return False
+    except Exception:
+        return False
+
 
 
 
