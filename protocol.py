@@ -114,7 +114,7 @@ def unpack_field(buffer: bytes, offset: int = 0) -> tuple[bytes, int]:
     if new_offset > len(buffer):
         raise ProtocolError("Buffer truncado: tamanho do campo excede bytes restantes", ErrorCode.FRAMING_INVALID)
 
-    field_data = buffer[offset + 2 : new_offset]
+    field_data = bytes(buffer[offset + 2 : new_offset])
     return field_data, new_offset
 
 
@@ -160,8 +160,8 @@ def parse_client_hello(data: bytes) -> ClientHello:
             ErrorCode.UNKNOWN_TYPE,
         )
 
-    client_id = data[1 : 1 + ID_LEN]
-    pk_client = data[1 + ID_LEN : 1 + ID_LEN + PK_LEN]
+    client_id = bytes(data[1 : 1 + ID_LEN])
+    pk_client = bytes(data[1 + ID_LEN : 1 + ID_LEN + PK_LEN])
 
     return ClientHello(client_id=client_id, pk_client=pk_client)
 
@@ -220,7 +220,7 @@ def parse_server_hello(data: bytes) -> ServerHello:
             ErrorCode.UNKNOWN_TYPE,
         )
 
-    salt_srv = data[1 : 1 + SALT_LEN]
+    salt_srv = bytes(data[1 : 1 + SALT_LEN])
     offset = 1 + SALT_LEN
 
     pk_server, offset = unpack_field(data, offset)
@@ -457,7 +457,7 @@ def parse_admin(data: bytes) -> AdminMessage:
 
     payload_start = 1
     payload_end = payload_start + expected_len
-    payload = data[payload_start:payload_end]
+    payload = bytes(data[payload_start:payload_end])
 
     seq_start = payload_end
     seq_end = seq_start + SEQ_LEN
@@ -566,16 +566,16 @@ def parse_data(data: bytes) -> DataMessage:
             ErrorCode.UNKNOWN_TYPE,
         )
 
-    nonce = data[1 : 1 + NONCE_LEN]
+    nonce = bytes(data[1 : 1 + NONCE_LEN])
     sender_start = 1 + NONCE_LEN
     recipient_start = sender_start + ID_LEN
     seq_start = recipient_start + ID_LEN
     ciphertext_start = seq_start + SEQ_LEN
 
-    sender_id = data[sender_start:recipient_start]
-    recipient_id = data[recipient_start:seq_start]
+    sender_id = bytes(data[sender_start:recipient_start])
+    recipient_id = bytes(data[recipient_start:seq_start])
     (seq_no,) = struct.unpack(">Q", data[seq_start:ciphertext_start])
-    ciphertext_and_tag = data[ciphertext_start:]
+    ciphertext_and_tag = bytes(data[ciphertext_start:])
 
     return DataMessage(
         nonce=nonce,
@@ -608,8 +608,8 @@ def peek_ids(data: bytes) -> tuple[bytes, bytes]:
     recipient_start = sender_start + ID_LEN
     recipient_end = recipient_start + ID_LEN
 
-    sender_id = data[sender_start:recipient_start]
-    recipient_id = data[recipient_start:recipient_end]
+    sender_id = bytes(data[sender_start:recipient_start])
+    recipient_id = bytes(data[recipient_start:recipient_end])
 
     return sender_id, recipient_id
 
@@ -776,7 +776,7 @@ async def recv_frame(reader: asyncio.StreamReader) -> Frame:
         raise ConnectionClosed("Conexão perdida durante leitura do corpo do frame") from e
 
     frame_type = body[0]
-    payload = body[1:]
+    payload = bytes(body[1:])
     return Frame(type=frame_type, payload=payload)
 
 
