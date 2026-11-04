@@ -3,7 +3,10 @@ protocol.py - Definições de constantes, estruturas e utilitários do protocolo
 Versão direta conforme PROTOCOLO_DIRETO.md.
 """
 
+import asyncio
 from enum import IntEnum
+import struct
+from typing import NamedTuple
 
 # ==========================================
 # CONSTANTES DE TAMANHO (em bytes)
@@ -31,9 +34,7 @@ class FrameType(IntEnum):
     PEER_LEFT    = 0x05
     ERROR        = 0x06
 
-# ==========================================
-# CÓDIGOS DE ERRO (usados no frame ERROR)
-# ==========================================
+# aqui fica as exceções: ConnectionClosed sera usada quando uma conexão cair ou for encerrada. protocolerro; sera usada quando queremos encalpsular uma mensagem clara e regra de quando ela foi descumprida
 class ErrorCode(IntEnum):
     FRAMING_INVALID = 0x01  # Framing inválido
     FRAME_TOO_LARGE = 0x02  # Frame grande demais
@@ -80,6 +81,106 @@ class ProtocolError(Exception):
             code_repr = self.code.name if hasattr(self.code, "name") else f"0x{self.code:02x}"
             return f"[{code_repr}] {self.message}"
         return self.message
+
+
+# ==========================================
+# ESTRUTURA E FUNÇÕES DE FRAMING
+# Prefixo de 4 bytes big-endian: [4B tamanho][1B tipo][campos]
+# ==========================================
+class Frame(NamedTuple):
+    type: int
+    payload: bytes
+
+    @property
+    def body(self) -> bytes:
+        """Corpo completo do frame (tipo + campos)."""
+        return bytes([self.type]) + self.payload
+
+
+def encode_frame(frame_type: int | FrameType | bytes, payload: bytes = b"") -> bytes:
+    """
+    Empacota um frame com prefixo de tamanho de 4 bytes big-endian.
+    Aceita (frame_type, payload) ou bytes já contendo [tipo + campos].
+    """
+    if isinstance(frame_type, (bytes, bytearray)):
+        body = bytes(frame_type)
+    else:
+        body = bytes([int(frame_type)]) + payload
+
+    n = len(body)
+    if n == 0:
+        raise ProtocolError("Tamanho do frame não pode ser 0", ErrorCode.FRAMING_INVALID)
+    if n > MAX_FRAME:
+        raise ProtocolError(
+            f"Frame excede tamanho máximo ({n} > {MAX_FRAME})",
+            ErrorCode.FRAME_TOO_LARGE,
+        )
+
+    return struct.pack(">I", n) + body
+
+
+async def send_frame(
+    writer: asyncio.StreamWriter,
+    frame_type_or_bytes: int | FrameType | bytes,
+    payload: bytes = b"",
+) -> None:
+    """Envia um frame no formato [4B tamanho big-endian][1B tipo][campos]."""
+    try:
+        if isinstance(frame_type_or_bytes, (bytes, bytearray)) and payload == b"":
+            # Se já for um frame pré-codificado com prefixo de 4 bytes correspondente
+            if len(frame_type_or_bytes) >= 4:
+                (expected_len,) = struct.unpack(">I", frame_type_or_bytes[:4])
+                if expected_len == len(frame_type_or_bytes) - 4:
+                    raw_data = bytes(frame_type_or_bytes)
+                else:
+                    raw_data = encode_frame(frame_type_or_bytes)
+            else:
+                raw_data = encode_frame(frame_type_or_bytes)
+        else:
+            raw_data = encode_frame(frame_type_or_bytes, payload)
+
+        writer.write(raw_data)
+        await writer.drain()
+    except (ConnectionResetError, BrokenPipeError) as e:
+        raise ConnectionClosed("Conexão perdida durante envio do frame") from e
+
+
+async def recv_frame(reader: asyncio.StreamReader) -> Frame:
+    """
+    Lê o prefixo de 4 bytes, valida o tamanho antes de ler o corpo,
+    e lê exatamente n bytes. Converte IncompleteReadError em ConnectionClosed.
+    """
+    # 1. Lê os 4 bytes do tamanho do frame
+    try:
+        len_bytes = await reader.readexactly(4)
+    except asyncio.IncompleteReadError as e:
+        raise ConnectionClosed("Conexão encerrada durante leitura do tamanho do frame") from e
+    except (ConnectionResetError, BrokenPipeError) as e:
+        raise ConnectionClosed("Conexão perdida durante leitura do tamanho do frame") from e
+
+    (n,) = struct.unpack(">I", len_bytes)
+
+    # 2. Valida o tamanho ANTES de alocar/ler o corpo
+    if n == 0:
+        raise ProtocolError("Tamanho do frame inválido (0)", ErrorCode.FRAMING_INVALID)
+    if n > MAX_FRAME:
+        raise ProtocolError(
+            f"Frame excede MAX_FRAME ({n} > {MAX_FRAME})",
+            ErrorCode.FRAME_TOO_LARGE,
+        )
+
+    # 3. Lê exatamente n bytes do corpo
+    try:
+        body = await reader.readexactly(n)
+    except asyncio.IncompleteReadError as e:
+        raise ConnectionClosed("Conexão truncada durante leitura do corpo do frame") from e
+    except (ConnectionResetError, BrokenPipeError) as e:
+        raise ConnectionClosed("Conexão perdida durante leitura do corpo do frame") from e
+
+    frame_type = body[0]
+    payload = body[1:]
+    return Frame(type=frame_type, payload=payload)
+
 
 
 if __name__ == "__main__":
