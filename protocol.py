@@ -5,6 +5,7 @@ Versão direta conforme PROTOCOLO_DIRETO.md.
 
 import asyncio
 from enum import IntEnum
+import hashlib
 import struct
 from typing import NamedTuple
 
@@ -235,6 +236,54 @@ def parse_server_hello(data: bytes) -> ServerHello:
         server_cert=server_cert,
         signature=signature,
     )
+
+
+# ==========================================
+# HASHES CRIPTOGRÁFICOS DO PROTOCOLO
+# ==========================================
+def handshake_hash(
+    pk_server_der: bytes,
+    pk_client: bytes,
+    client_id: bytes,
+    salt: bytes,
+) -> bytes:
+    """
+    H = SHA256(pk_S_der || pk_C || client_id || salt)
+    Retorna 32 bytes (digest SHA-256).
+    """
+    if len(pk_client) != PK_LEN:
+        raise ProtocolError(f"pk_client deve ter {PK_LEN} bytes (recebido: {len(pk_client)})", ErrorCode.FRAMING_INVALID)
+    if len(client_id) != ID_LEN:
+        raise ProtocolError(f"client_id deve ter {ID_LEN} bytes (recebido: {len(client_id)})", ErrorCode.FRAMING_INVALID)
+    if len(salt) != SALT_LEN:
+        raise ProtocolError(f"salt deve ter {SALT_LEN} bytes (recebido: {len(salt)})", ErrorCode.FRAMING_INVALID)
+
+    material = pk_server_der + pk_client + client_id + salt
+    return hashlib.sha256(material).digest()
+
+
+def admin_hash(
+    frame_type: int | FrameType,
+    salt_destino: bytes,
+    seq: int,
+    payload: bytes,
+) -> bytes:
+    """
+    H_adm = SHA256("ADMIN" || tipo || salt_destino || seq || payload)
+    O seq entra como 8 bytes big-endian (>Q).
+    Retorna 32 bytes (digest SHA-256).
+    """
+    if len(salt_destino) != SALT_LEN:
+        raise ProtocolError(f"salt_destino deve ter {SALT_LEN} bytes (recebido: {len(salt_destino)})", ErrorCode.FRAMING_INVALID)
+    if seq < 0 or seq > 0xFFFFFFFFFFFFFFFF:
+        raise ProtocolError(f"seq inválido para contador de 64 bits: {seq}", ErrorCode.FRAMING_INVALID)
+
+    tipo_byte = bytes([int(frame_type)])
+    seq_bytes = struct.pack(">Q", seq)
+
+    material = b"ADMIN" + tipo_byte + salt_destino + seq_bytes + payload
+    return hashlib.sha256(material).digest()
+
 
 
 
