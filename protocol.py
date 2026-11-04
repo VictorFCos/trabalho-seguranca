@@ -614,6 +614,46 @@ def peek_ids(data: bytes) -> tuple[bytes, bytes]:
     return sender_id, recipient_id
 
 
+# ==========================================
+# PAPÉIS DO PAR E SALT DE SESSÃO E2E
+# A é o menor client_id (comparação byte a byte). salt_par é o salt_srv do A.
+# ==========================================
+def i_am_a(my_id: bytes, peer_id: bytes) -> bool:
+    """
+    Determina se este cliente é o participante 'A' na sessão com o peer.
+    'A' é quem possui o menor client_id na comparação byte a byte.
+    Dispara ProtocolError se my_id == peer_id.
+    """
+    if len(my_id) != ID_LEN:
+        raise ProtocolError(f"my_id deve ter {ID_LEN} bytes (recebido: {len(my_id)})", ErrorCode.FRAMING_INVALID)
+    if len(peer_id) != ID_LEN:
+        raise ProtocolError(f"peer_id deve ter {ID_LEN} bytes (recebido: {len(peer_id)})", ErrorCode.FRAMING_INVALID)
+
+    if my_id == peer_id:
+        raise ProtocolError("client_id próprio e do peer não podem ser iguais", ErrorCode.FRAMING_INVALID)
+
+    return my_id < peer_id
+
+
+def pair_salt(
+    my_id: bytes,
+    peer_id: bytes,
+    my_salt: bytes,
+    peer_salt: bytes,
+) -> bytes:
+    """
+    Retorna o salt compartilhado da sessão E2E (salt_par).
+    Por definição do protocolo, salt_par é o salt_srv do cliente com menor ID ('A').
+    """
+    if len(my_salt) != SALT_LEN:
+        raise ProtocolError(f"my_salt deve ter {SALT_LEN} bytes (recebido: {len(my_salt)})", ErrorCode.FRAMING_INVALID)
+    if len(peer_salt) != SALT_LEN:
+        raise ProtocolError(f"peer_salt deve ter {SALT_LEN} bytes (recebido: {len(peer_salt)})", ErrorCode.FRAMING_INVALID)
+
+    return my_salt if i_am_a(my_id, peer_id) else peer_salt
+
+
+
 
 
 
