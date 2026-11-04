@@ -474,6 +474,147 @@ def parse_admin(data: bytes) -> AdminMessage:
     return AdminMessage(type=frame_type, payload=payload, seq=seq, signature=signature)
 
 
+# ==========================================
+# DATA (Tipo 0x03) - Criptografia Ponta-a-Ponta (E2E)
+# Formato: [03][nonce 12][sender 16][recipient 16][seq 8][ciphertext+tag 16]
+# Limites: DATA_MIN_LEN (70) até DATA_MAX_LEN (4165)
+# ==========================================
+AAD_LEN = (2 * ID_LEN) + SEQ_LEN  # 16 + 16 + 8 = 40 bytes
+
+
+class DataMessage(NamedTuple):
+    nonce: bytes
+    sender_id: bytes
+    recipient_id: bytes
+    seq: int
+    ciphertext_and_tag: bytes
+
+
+def build_nonce(iv_base: bytes, seq_no: int) -> bytes:
+    """Constrói nonce de 12 bytes: IV_base (4B) || seq_no (8B big-endian)."""
+    if len(iv_base) != 4:
+        raise ProtocolError(f"IV_base deve ter 4 bytes (recebido: {len(iv_base)})", ErrorCode.FRAMING_INVALID)
+    if not (0 <= seq_no <= 0xFFFFFFFFFFFFFFFF):
+        raise ProtocolError(f"seq_no inválido para 64 bits: {seq_no}", ErrorCode.FRAMING_INVALID)
+    return iv_base + struct.pack(">Q", seq_no)
+
+
+def build_aad(sender_id: bytes, recipient_id: bytes, seq_no: int) -> bytes:
+    """Constrói AAD de 40 bytes: sender_id (16B) || recipient_id (16B) || seq_no (8B big-endian)."""
+    if len(sender_id) != ID_LEN:
+        raise ProtocolError(f"sender_id deve ter {ID_LEN} bytes (recebido: {len(sender_id)})", ErrorCode.FRAMING_INVALID)
+    if len(recipient_id) != ID_LEN:
+        raise ProtocolError(f"recipient_id deve ter {ID_LEN} bytes (recebido: {len(recipient_id)})", ErrorCode.FRAMING_INVALID)
+    if not (0 <= seq_no <= 0xFFFFFFFFFFFFFFFF):
+        raise ProtocolError(f"seq_no inválido para 64 bits: {seq_no}", ErrorCode.FRAMING_INVALID)
+    return sender_id + recipient_id + struct.pack(">Q", seq_no)
+
+
+def pack_data(
+    nonce: bytes,
+    sender_id: bytes,
+    recipient_id: bytes,
+    seq_no: int,
+    ciphertext_and_tag: bytes,
+) -> bytes:
+    """
+    Empacota o corpo do frame DATA:
+    [03][nonce 12][sender 16][recipient 16][seq 8][ciphertext+tag]
+    Valida tamanho entre DATA_MIN_LEN (70) e DATA_MAX_LEN (4165).
+    """
+    if len(nonce) != NONCE_LEN:
+        raise ProtocolError(f"nonce deve ter {NONCE_LEN} bytes (recebido: {len(nonce)})", ErrorCode.FRAMING_INVALID)
+    if len(sender_id) != ID_LEN:
+        raise ProtocolError(f"sender_id deve ter {ID_LEN} bytes (recebido: {len(sender_id)})", ErrorCode.FRAMING_INVALID)
+    if len(recipient_id) != ID_LEN:
+        raise ProtocolError(f"recipient_id deve ter {ID_LEN} bytes (recebido: {len(recipient_id)})", ErrorCode.FRAMING_INVALID)
+    if not (0 <= seq_no <= 0xFFFFFFFFFFFFFFFF):
+        raise ProtocolError(f"seq_no inválido para 64 bits: {seq_no}", ErrorCode.FRAMING_INVALID)
+
+    body = (
+        bytes([FrameType.DATA])
+        + nonce
+        + sender_id
+        + recipient_id
+        + struct.pack(">Q", seq_no)
+        + ciphertext_and_tag
+    )
+
+    if len(body) < DATA_MIN_LEN or len(body) > DATA_MAX_LEN:
+        raise ProtocolError(
+            f"Tamanho do frame DATA inválido: {len(body)} (permitido: {DATA_MIN_LEN} a {DATA_MAX_LEN})",
+            ErrorCode.FRAMING_INVALID if len(body) < DATA_MIN_LEN else ErrorCode.FRAME_TOO_LARGE,
+        )
+
+    return body
+
+
+def parse_data(data: bytes) -> DataMessage:
+    """
+    Desempacota o corpo do frame DATA.
+    Valida tamanho entre 70 e 4165 e tipo 0x03.
+    """
+    if len(data) < DATA_MIN_LEN or len(data) > DATA_MAX_LEN:
+        raise ProtocolError(
+            f"Tamanho do frame DATA fora dos limites: {len(data)} (esperado entre {DATA_MIN_LEN} e {DATA_MAX_LEN})",
+            ErrorCode.FRAMING_INVALID if len(data) < DATA_MIN_LEN else ErrorCode.FRAME_TOO_LARGE,
+        )
+
+    if data[0] != FrameType.DATA:
+        raise ProtocolError(
+            f"Tipo inválido para DATA: esperado 0x{FrameType.DATA:02x}, recebido 0x{data[0]:02x}",
+            ErrorCode.UNKNOWN_TYPE,
+        )
+
+    nonce = data[1 : 1 + NONCE_LEN]
+    sender_start = 1 + NONCE_LEN
+    recipient_start = sender_start + ID_LEN
+    seq_start = recipient_start + ID_LEN
+    ciphertext_start = seq_start + SEQ_LEN
+
+    sender_id = data[sender_start:recipient_start]
+    recipient_id = data[recipient_start:seq_start]
+    (seq_no,) = struct.unpack(">Q", data[seq_start:ciphertext_start])
+    ciphertext_and_tag = data[ciphertext_start:]
+
+    return DataMessage(
+        nonce=nonce,
+        sender_id=sender_id,
+        recipient_id=recipient_id,
+        seq=seq_no,
+        ciphertext_and_tag=ciphertext_and_tag,
+    )
+
+
+def peek_ids(data: bytes) -> tuple[bytes, bytes]:
+    """
+    Lê apenas sender_id e recipient_id do frame DATA sem decifrar nem copiar o ciphertext.
+    Valida tamanho entre 70 e 4165 e tipo 0x03.
+    Retorna (sender_id, recipient_id).
+    """
+    if len(data) < DATA_MIN_LEN or len(data) > DATA_MAX_LEN:
+        raise ProtocolError(
+            f"Tamanho do frame DATA fora dos limites: {len(data)} (esperado entre {DATA_MIN_LEN} e {DATA_MAX_LEN})",
+            ErrorCode.FRAMING_INVALID if len(data) < DATA_MIN_LEN else ErrorCode.FRAME_TOO_LARGE,
+        )
+
+    if data[0] != FrameType.DATA:
+        raise ProtocolError(
+            f"Tipo inválido para DATA: esperado 0x{FrameType.DATA:02x}, recebido 0x{data[0]:02x}",
+            ErrorCode.UNKNOWN_TYPE,
+        )
+
+    sender_start = 1 + NONCE_LEN
+    recipient_start = sender_start + ID_LEN
+    recipient_end = recipient_start + ID_LEN
+
+    sender_id = data[sender_start:recipient_start]
+    recipient_id = data[recipient_start:recipient_end]
+
+    return sender_id, recipient_id
+
+
+
 
 
 
