@@ -161,6 +161,83 @@ def parse_client_hello(data: bytes) -> ClientHello:
     return ClientHello(client_id=client_id, pk_client=pk_client)
 
 
+# ==========================================
+# SERVER_HELLO (Tipo 0x02)
+# Formato: [02][salt_srv 16][len][pk_S][len][server.crt][len][assinatura]
+# Mínimo: 1 (tipo) + 16 (salt) + 3*2 (prefixos dos campos variáveis) = 23 bytes
+# ==========================================
+SERVER_HELLO_MIN_LEN = 1 + SALT_LEN + (3 * 2)  # 23 bytes
+
+
+class ServerHello(NamedTuple):
+    salt_srv: bytes
+    pk_server: bytes
+    server_cert: bytes
+    signature: bytes
+
+
+def pack_server_hello(
+    salt_srv: bytes,
+    pk_server: bytes,
+    server_cert: bytes,
+    signature: bytes,
+) -> bytes:
+    """
+    Empacota o corpo do SERVER_HELLO:
+    [02][salt_srv 16][len][pk_S][len][server.crt][len][assinatura]
+    """
+    if len(salt_srv) != SALT_LEN:
+        raise ProtocolError(f"salt_srv deve ter {SALT_LEN} bytes (recebido: {len(salt_srv)})", ErrorCode.FRAMING_INVALID)
+
+    return (
+        bytes([FrameType.SERVER_HELLO])
+        + salt_srv
+        + pack_field(pk_server)
+        + pack_field(server_cert)
+        + pack_field(signature)
+    )
+
+
+def parse_server_hello(data: bytes) -> ServerHello:
+    """
+    Desempacota o corpo do SERVER_HELLO.
+    Exige no mínimo 23 bytes, tipo 0x02 e consumo exato de todos os bytes.
+    """
+    if len(data) < SERVER_HELLO_MIN_LEN:
+        raise ProtocolError(
+            f"SERVER_HELLO deve ter no mínimo {SERVER_HELLO_MIN_LEN} bytes (recebido: {len(data)})",
+            ErrorCode.FRAMING_INVALID,
+        )
+
+    if data[0] != FrameType.SERVER_HELLO:
+        raise ProtocolError(
+            f"Tipo inválido para SERVER_HELLO: esperado 0x{FrameType.SERVER_HELLO:02x}, recebido 0x{data[0]:02x}",
+            ErrorCode.UNKNOWN_TYPE,
+        )
+
+    salt_srv = data[1 : 1 + SALT_LEN]
+    offset = 1 + SALT_LEN
+
+    pk_server, offset = unpack_field(data, offset)
+    server_cert, offset = unpack_field(data, offset)
+    signature, offset = unpack_field(data, offset)
+
+    # Exigência: o corpo deve ser consumido exatamente, sem sobra
+    if offset != len(data):
+        raise ProtocolError(
+            f"SERVER_HELLO contém {len(data) - offset} bytes extras no final",
+            ErrorCode.FRAMING_INVALID,
+        )
+
+    return ServerHello(
+        salt_srv=salt_srv,
+        pk_server=pk_server,
+        server_cert=server_cert,
+        signature=signature,
+    )
+
+
+
 
 #funções encode_frame: valida se o tamanho esta dentro dos limites; send_frame: escreve o frame do socket e aguarda o envio; 
 #frame e recv_frame: 
